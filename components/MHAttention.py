@@ -1,7 +1,7 @@
 from torch import nn
 import torch
 
-from attention_utils import get_EF
+from components.attentionUtils import get_EF
 from linearAttentionHead import LinearAttentionHead
 
 

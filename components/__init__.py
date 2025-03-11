@@ -1,3 +1,3 @@
-from attention_utils import get_EF
+from components.attentionUtils import get_EF
 
 __All__ = ["get_EF"]

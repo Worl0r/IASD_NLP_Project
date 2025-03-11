@@ -1,0 +1,4 @@
+DATA:
+  n_samples: 10_000
+MODEL:
+  activation: "swish"
