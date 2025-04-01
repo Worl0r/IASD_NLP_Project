@@ -5,7 +5,9 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.utils import get_logger, read_yaml_config
 
 from datasets import load_dataset
+from dataset import preprocessing_fn, DataCollator
 from transformers import BertTokenizer
+from torch.utils.data import DataLoader
 
 # Define the logger
 logger = get_logger()
@@ -20,11 +22,14 @@ writer = SummaryWriter("runs/")
 config_path = os.path.join(os.getcwd(), "configuration.yaml")
 
 
-def main():
+def main_NLP():
     # Read the configuration
     config = read_yaml_config(config_path)
 
     n_samples = config["DATA"]["n_samples"]
+    test_ratio = config["DATA"]["ratio"]
+    batch_size = config["DATA"]["batch_size"]
+    epochs = config["TRAINING"]["epochs"]
 
     # Load the dataset
     dataset = load_dataset("stanfordnlp/imdb", split="train")
@@ -38,11 +43,35 @@ def main():
     shuffled_dataset = dataset.shuffle(seed=42)
 
     # Select n_sampless samples
-    small_dataset = dataset.select(list(range(n_samples)))
+    small_dataset = shuffled_dataset.select(list(range(n_samples)))
+
+    dataset = small_dataset.train_test_split(test_size=test_ratio)
+
+    def preprocess_text(x):
+        ids = tokenizer(
+            x["description"], truncation=True, max_length=256, padding=False
+        )["input_ids"]
+        return {"input_ids": ids, "label": x["label"] - 1}
+
+    # Clean the dataset and tokenize it directly
+    dataset = dataset.map(preprocess_text)
+
+    data_collator = DataCollator(tokenizer)
+
+    train_dataloader = DataLoader(
+        dataset["train"],
+        batch_size=batch_size,
+        collate_fn=data_collator,
+        shuffle=True,
+    )
+    valid_dataloader = DataLoader(
+        dataset["test"],
+        batch_size=batch_size,
+        collate_fn=data_collator,
+        shuffle=True,
+    )
+
     print(dataset)
-
-
-epochs = 5
 
 
 def train(
@@ -162,5 +191,84 @@ for epoch in range(1, epochs + 1):
 
 writer.close()
 
-if __init__() == "main":
-    main()
+if __name__() == "main":
+    main_NLP()
+
+
+def validation_step(valid_dataloader, model, criterion):
+    n_valid = len(valid_dataloader.dataset)
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    n_iter = 0
+    with torch.no_grad():
+        for batch in valid_dataloader:
+            input_ids = batch["input_ids"].to(DEVICE)
+            labels = batch["labels"].to(DEVICE)
+            pad_mask = batch["pad_mask"].to(DEVICE)
+            output = model(input_ids, pad_mask)
+            loss = criterion(output, labels)
+            total_loss += loss.item()
+            correct += (output.argmax(axis=-1) == labels).sum().item()
+            n_iter += 1
+    return total_loss / n_iter, correct / n_valid
+
+
+def train_one_epoch(train_dataloader, model, optimizer, criterion):
+    model.train()
+    total_loss = 0.0
+    correct = 0
+    n_train = len(train_dataloader.dataset)
+    n_iter = 0
+    for batch in train_dataloader:
+        optimizer.zero_grad()
+        input_ids = batch["input_ids"].to(DEVICE)
+        labels = batch["labels"].to(DEVICE)
+        pad_mask = batch["pad_mask"].to(DEVICE)
+        class_scores = model(input_ids, pad_mask)  # (B, 4)
+
+        loss = criterion(class_scores, labels)  # scalaire (1,)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        correct += (class_scores.argmax(axis=-1) == labels).sum().item()
+        n_iter += 1
+
+    return total_loss / n_iter, correct / n_train
+
+
+def train(model, train_dataloader, valid_dataloader, lr=0.01, n_epochs=5):
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # Track training loss, training accuracy, validation loss and validation accuracy and plot in the end
+    train_losses = []
+    train_accuracies = []
+    valid_losses = []
+    valid_accuracies = []
+    model.to(DEVICE)
+    for epoch in tqdm(range(n_epochs)):
+        train_loss, train_accuracy = train_one_epoch(
+            train_dataloader, model, optimizer, criterion
+        )
+        valid_loss, valid_accuracy = validation_step(
+            valid_dataloader, model, criterion
+        )
+        print(
+            f"Epoch {epoch + 1}: train_loss: {train_loss:.4f}, train_accuracy: {train_accuracy:.4f}, valid_loss: {valid_loss:.4f}, valid_accuracy: {valid_accuracy:.4f}"
+        )
+        train_losses.append(train_loss)
+        train_accuracies.append(train_accuracy)
+        valid_losses.append(valid_loss)
+        valid_accuracies.append(valid_accuracy)
+
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label="train loss")
+    plt.plot(valid_losses, label="valid loss")
+    plt.legend()
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accuracies, label="train accuracy")
+    plt.plot(valid_accuracies, label="valid accuracy")
+    plt.legend()

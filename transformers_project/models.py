@@ -2,6 +2,7 @@ from torch import nn
 import torch
 
 from utils.types import ActivationFunction, Tensor
+from components.positionalEncoding import PositionalEncoding
 
 
 class Transformers(nn.Module):
@@ -24,6 +25,8 @@ class Transformers(nn.Module):
         super().__init__()
         self.use_positional_encoding = use_positional_encoding
 
+        self.embedding = nn.Embedding(d_model)
+
         self.positional_encoding = PositionalEncoding(
             max_seq_length=src_vocab_size, d_model=d_model
         )
@@ -32,6 +35,7 @@ class Transformers(nn.Module):
 
         # Inpout layer
         self.src_input_layer = nn.Linear(nbr_classes, d_model)
+
         # we remove the demand count classes because we want to predict it
         self.tgt_input_layer = nn.Linear(nbr_classes - 1, d_model)
 
@@ -138,8 +142,13 @@ class Transformers(nn.Module):
         tgt_mask = self.generate_mask(tgt, "known")
 
         if self.use_positional_encoding:
-            src_embedded = self.apply_dropout(self.positional_encoding(src))
-            tgt_embedded = self.apply_dropout(self.positional_encoding(tgt))
+            return
+            # src_embedded = self.apply_dropout(
+            #     self.embedding(src) + self.positional_encoding(src)
+            # )
+            # tgt_embedded = self.apply_dropout(
+            #     self.embedding(tgt) + self.positional_encoding(tgt)
+            # )
         else:
             src_embedded = self.src_input_layer(src).to(self.device)
             src_embedded = self.input_normalization(src_embedded).to(
