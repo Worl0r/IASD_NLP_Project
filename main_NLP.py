@@ -7,6 +7,8 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from transformers_project.linformer.linformer import LinformerEnc
+
 
 # Transformer-based classifier
 class TransformerClassifier(nn.Module):
@@ -74,13 +76,15 @@ def train(
     model.train()
     total_loss, total_acc = 0, 0
 
-    for batch in tqdm(dataloader, desc=f"Training Epoch {epoch}"):
+    for i, batch in enumerate(
+        tqdm(dataloader, desc=f"Training Epoch {epoch}")
+    ):
         input_ids = batch["input_ids"].to(device)
         labels = batch["label"].to(device)
 
         optimizer.zero_grad()
         logits = model(input_ids)
-        loss = loss_fn(logits, labels)
+        loss = loss_fn(logits.squeeze(-1), labels.to(float))
         loss.backward()
         optimizer.step()
         scheduler.step()
@@ -90,6 +94,8 @@ def train(
 
         total_loss += loss.item()
         total_acc += acc
+        writer.add_scalar("Loss/train_t", loss, epoch + i * len(dataloader))
+        writer.add_scalar("Accuracy/train_t", acc, epoch + i * len(dataloader))
 
     avg_loss = total_loss / len(dataloader)
     avg_acc = total_acc / len(dataloader)
@@ -107,7 +113,7 @@ def validate(model, dataloader, loss_fn, writer, device, epoch):
             labels = batch["label"].to(device)
 
             logits = model(input_ids)
-            loss = loss_fn(logits, labels)
+            loss = loss_fn(logits.squeeze(-1), labels.to(float))
 
             preds = torch.argmax(logits, dim=-1)
             acc = (preds == labels).float().mean().item()
@@ -134,14 +140,39 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = TransformerClassifier(
-        vocab_size=tokenizer.vocab_size, num_classes=2
-    ).to(device)
+    # model = TransformerClassifier(
+    #     vocab_size=tokenizer.vocab_size, num_classes=2
+    # ).to(device)
+
+    model = LinformerEnc(
+        seq_len=64,
+        dim=256,
+        dim_lin_base=256,
+        vocab_size=tokenizer.vocab_size,
+        n_features=1,
+        device=device,
+        d_conversion=128,
+        max_prediction_length=1,
+        dropout_input=0.01,
+        dropout_multi_head_att=0.01,
+        dropout_lin_att=0.01,
+        dim_ff=256,
+        ff_intermediate=None,
+        dropout_ff=0.01,
+        nhead=4,
+        n_layers=4,
+        dropout=0.01,
+        parameter_sharing="layerwise",
+        k_reduce_by_layer=0,
+        w_o_intermediate_dim=None,
+        method="learnable",
+        activation="gelu",
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
     loss_fn = nn.CrossEntropyLoss()
-    writer = SummaryWriter()
+    writer = SummaryWriter("runs/transformer_classifier")
 
     num_epochs = 10
     for epoch in range(1, num_epochs + 1):

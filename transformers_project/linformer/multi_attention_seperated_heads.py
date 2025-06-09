@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from .projections import get_EF
+from .EF_generator import get_EF
 
 from .linear_attention_head import LinearAttentionHead
 
@@ -22,11 +22,11 @@ class MHAttention_seperated_heads(nn.Module):
         nhead,  # Number of heads
         dropout_multi_head_att,  # Dropout for the multi head attention
         dropout_lin_att,  # Dropout for the linear head attention
-        checkpoint_level,
         parameter_sharing,
         E_proj,
         F_proj,
         device,
+        causal_mask,
         w_o_intermediate_dim: int | None = None,
         decoder_mode=False,
         method="learnable",
@@ -37,8 +37,6 @@ class MHAttention_seperated_heads(nn.Module):
         self.seq_len = seq_len
         # Dimension of one head
         self.dim_k = dim_k
-        # Define the level of the checkpointing
-        self.checkpoint_level = checkpoint_level
         # Allow an additional linear layer after the concatenation of the heads
         self.w_o_intermediate_dim = w_o_intermediate_dim
 
@@ -64,14 +62,19 @@ class MHAttention_seperated_heads(nn.Module):
         for _ in range(nhead):
             # Create the linear attention layer
             attn = LinearAttentionHead(
-                dim, dropout_lin_att, E_proj, F_proj, device
+                dim,
+                dropout_lin_att,
+                E_proj,
+                F_proj,
+                device,
+                causal_mask,
             )
             self.heads.append(attn)
 
             # Tranform the dimension of the input into dimension of the head
-            self.to_q.append(nn.Linear(dim_k, dim, bias=False))
-            self.to_k.append(nn.Linear(dim_k, dim, bias=False))
-            self.to_v.append(nn.Linear(dim_k, dim, bias=False))
+            self.to_q.append(nn.Linear(dim, dim_k, bias=False))
+            self.to_k.append(nn.Linear(dim, dim_k, bias=False))
+            self.to_v.append(nn.Linear(dim, dim_k, bias=False))
 
         if w_o_intermediate_dim is None:
             # Come back to the original dimension with one linear layer
@@ -86,18 +89,19 @@ class MHAttention_seperated_heads(nn.Module):
     def forward(self, tensor, **kwargs):
         batch_size, seq_len, dim = tensor.shape
 
-        assert not (self.decoder_mode and "embeddings" not in kwargs), (
-            "Embeddings must be supplied if decoding"
+        assert not (self.decoder_mode and "encoded_sequences" not in kwargs), (
+            "encoded_sequences must be supplied if decoding"
         )
-        assert not (
-            "embeddings" in kwargs
-            and (
-                kwargs["embeddings"].shape[0],
-                kwargs["embeddings"].shape[1],
-                kwargs["embeddings"].shape[2],
-            )
-            != (batch_size, seq_len, dim)
-        ), "Embeddings size must be the same as the input tensor"
+
+        # assert not (
+        #     "encoded_sequences" in kwargs
+        #     and (
+        #         kwargs["encoded_sequences"].shape[0],
+        #         kwargs["encoded_sequences"].shape[1],
+        #         kwargs["encoded_sequences"].shape[2],
+        #     )
+        #     != (batch_size, seq_len, dim)
+        # ), "encoded_sequences size must be the same as the input tensor"
 
         head_outputs = []
 
@@ -109,21 +113,15 @@ class MHAttention_seperated_heads(nn.Module):
             K = (
                 self.to_k[index](tensor)
                 if not self.decoder_mode
-                else self.to_k[index](kwargs["embeddings"])
+                else self.to_k[index](kwargs["encoded_sequences"])
             )
             V = (
                 self.to_v[index](tensor)
                 if not self.decoder_mode
-                else self.to_v[index](kwargs["embeddings"])
+                else self.to_v[index](kwargs["encoded_sequences"])
             )
 
-            # Checkpointing to save memory
-            if self.checkpoint_level == "MHAttention":
-                head_outputs.append(
-                    checkpoint(head, Q, K, V, use_reentrant=True)
-                )
-            else:
-                head_outputs.append(head(Q, K, V, **kwargs))
+            head_outputs.append(head(Q, K, V, **kwargs))
 
         # Concatenation
         out = torch.cat(head_outputs, dim=-1)

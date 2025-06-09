@@ -14,6 +14,7 @@ class LinearAttentionHead(nn.Module):
         E_proj,
         F_proj,
         device,
+        causal_mask,
     ):
         super().__init__()
 
@@ -25,6 +26,10 @@ class LinearAttentionHead(nn.Module):
         self.dim = dim
         self.dropout = nn.Dropout(dropout_lin_att)
         self.device = device
+
+        self.is_proj_tensor = isinstance(E_proj, torch.Tensor)
+
+        self.causal_mask = causal_mask
 
     def forward(self, Q, K, V, **kwargs):
         # K shape: (bt, seq, dim_k)
@@ -39,17 +44,17 @@ class LinearAttentionHead(nn.Module):
 
         ## Retrive potential mask (if decoder)
         input_mask = kwargs.get("input_mask")
-        embeddings_mask = kwargs.get("embeddings_mask")
+        encoded_sequences = kwargs.get("embedding_mask")
 
         # Mask if needed
         K, V = self.mask_input(input_mask, K, V)
-        Q = self.mask_embeddings(embeddings_mask, Q)
+        Q = self.mask_embeddings(encoded_sequences, Q)
 
         # Transpose
-        K = K.permute(-1, -2)  # (bt, dim_k, seq)
+        K = K.permute(0, 2, 1)  # (bt, dim_k, seq)
 
         # Linear projection of the key with E
-        K_proj = torch.matmul(K, self.E)
+        K_proj = torch.matmul(K, self.E) if self.is_proj_tensor else self.E(K)
         # (in the paper it is (E_i.K.W_i^K).T)
         # K_proj shape: (bt, dim_k, dim_lin)
 
@@ -62,6 +67,14 @@ class LinearAttentionHead(nn.Module):
             self.device
         )
 
+        # Only in decoder mode we add causal mask
+        # DEBUG
+        # if self.causal_mask is not None:
+        #     self.causal_mask = self.causal_mask.to(self.device)
+        #     simQK_proj = simQK_proj.masked_fill_(
+        #         ~self.causal_mask, float("-inf")
+        #     )
+
         # Softmax function
         P_bar = simQK_proj.softmax(dim=-1)
         # P_bar shape egual to new Q
@@ -70,16 +83,16 @@ class LinearAttentionHead(nn.Module):
         P_bar = self.dropout(P_bar)
 
         # Transpose
-        V = V.permute(-1, -2)
+        V = V.permute(0, 2, 1)
         # V shape : (bt, dim_k, seq)
 
         # Linear projection of the value with F
-        V_proj = torch.matmul(V, self.F)
+        V_proj = torch.matmul(V, self.F) if self.is_proj_tensor else self.F(V)
         # (in the paper it is (F_i.V.W_i^V).T)
         # V_proj shape : (bt, dim_k, dim_lin)
 
         # Transpose
-        V_proj_T = V_proj.permute(-1, -2)
+        V_proj_T = V_proj.permute(0, 2, 1)
         # V_proj_T shape: (bt, dim_lin, dim_k)
 
         P_bar = torch.matmul(P_bar, V_proj_T)

@@ -2,21 +2,19 @@ import sys
 import os
 
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
-from .projections import (
+from .EF_generator import (
     get_EF,
-    get_act,
 )
 from .multi_attention_seperated_heads import MHAttention_seperated_heads
 
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from transformer_toolbox import (
-    PositionWiseFeedForward,
-)
-
+from .position_wise_feed_forward import PositionWiseFeedForward
+from .activation import get_act
 from .residual import Residual
+from .mask import gen_causal_mask
 
 
 class LinformerLayers(nn.Module):
@@ -37,7 +35,6 @@ class LinformerLayers(nn.Module):
         dropout_multi_head_att=0.1,
         dropout_lin_att=0.1,
         activation="gelu",
-        checkpoint_level="MHAttention",
         parameter_sharing="layerwise",
         k_reduce_by_layer=0,
         w_o_intermediate_dim=None,
@@ -49,11 +46,6 @@ class LinformerLayers(nn.Module):
 
         self.activation = get_act(activation)
 
-        assert (
-            checkpoint_level == "C0"
-            or checkpoint_level == "Linformer"
-            or checkpoint_level == "MHAttention"
-        ), "Checkpoint level has to be either C0, Linformer, or MHAttention."
         assert (
             parameter_sharing == "none"
             or parameter_sharing == "headwise"
@@ -78,7 +70,6 @@ class LinformerLayers(nn.Module):
         self.decoder_mode = decoder_mode
         self.seq_len = seq_len
         self.dim = dim
-        self.checkpoint_level = checkpoint_level
         self.n_layers = n_layers
         self.nhead = nhead
 
@@ -101,16 +92,18 @@ class LinformerLayers(nn.Module):
                 nhead,
                 dropout_multi_head_att,
                 dropout_lin_att,
-                checkpoint_level,
                 parameter_sharing,
                 E_proj,
                 E_proj,
                 w_o_intermediate_dim,
                 decoder_mode=False,
                 method=method,
+                causal_mask=None,
             )
 
         def get_attn_context(attn_dim, curr_dim_k):
+            causal_mask = gen_causal_mask(seq_len, dim_k)
+
             return MHAttention_seperated_heads(
                 seq_len,
                 dim,
@@ -119,19 +112,19 @@ class LinformerLayers(nn.Module):
                 nhead,
                 dropout_multi_head_att,
                 dropout_lin_att,
-                checkpoint_level,
                 parameter_sharing,
                 E_proj,
                 E_proj,
                 w_o_intermediate_dim,
                 decoder_mode=True,
                 method=method,
+                causal_mask=causal_mask,
             )
 
         def get_ff(input_dim, output_dim, activation_function):
             return PositionWiseFeedForward(
                 d_input=input_dim,
-                d_ouput=output_dim,
+                d_output=output_dim,
                 d_ff=dim_ff,
                 dropout=dropout_ff,
                 activation=activation_function,
@@ -154,33 +147,32 @@ class LinformerLayers(nn.Module):
                 else dim
             )
 
-            # Encoder part: There is the option to decrease
-            attn_layer = get_attn(
-                input_dim, max(1, dim_lin_base - index * k_reduce_by_layer)
-            )
-            ff_layer = get_ff(input_dim, output_dim, self.activation)
+            if not self.decoder_mode:
+                # Encoder part: There is the option to decrease
+                attn_layer = get_attn(
+                    input_dim, max(1, dim_lin_base - index * k_reduce_by_layer)
+                )
+                ff_layer = get_ff(input_dim, output_dim, self.activation)
 
-            attn_layer = Residual(attn_layer, input_dim, input_dim)
+                attn_layer = Residual(attn_layer, input_dim, input_dim)
 
-            ff_layer = Residual(ff_layer, input_dim, output_dim)
+                ff_layer = Residual(ff_layer, input_dim, output_dim)
 
-            layers.extend([attn_layer, ff_layer])
+                layers.extend([attn_layer, ff_layer])
 
             # Decoder part
-            if not self.decoder_mode:
-                continue
+            else:
+                attn_context = get_attn_context(
+                    dim, max(1, dim_lin_base - index * k_reduce_by_layer)
+                )
 
-            attn_context = get_attn_context(
-                dim, max(1, dim_lin_base - index * k_reduce_by_layer)
-            )
+                ff_context = get_ff(dim, dim, self.activation)
 
-            ff_context = get_ff(dim, dim, self.activation)
+                attn_context = Residual(attn_context, dim, dim)
 
-            attn_context = Residual(attn_context, dim, dim)
+                ff_context = Residual(ff_context, dim, dim)
 
-            ff_context = Residual(ff_context, dim, dim)
-
-            layers.extend([attn_context, ff_context])
+                layers.extend([attn_context, ff_context])
 
         self.seq = layers
 
@@ -190,7 +182,7 @@ class LinformerLayers(nn.Module):
         """
         _, n, d = tensor.shape
 
-        assert n == self.seq_len, (
+        assert not (not self.decoder_mode and n != self.seq_len), (
             "This tensor is of the wrong size. Dimension 1 has to match"
             " the `seq_len` flag"
         )
@@ -202,13 +194,13 @@ class LinformerLayers(nn.Module):
             "Cannot run checkpointing when using kwargs."
             " Please set the checkpoint level to `C0`"
         )
-        assert "embeddings" not in kwargs or self.decoder_mode, (
-            "If decoding, needs to be initialized with `decoder_mode=True`"
-        )
+
+        if self.decoder_mode and "encoded_sequences" not in kwargs:
+            raise ValueError(
+                "If decoder_mode is activated,"
+                " we need to use the encoded_sequences parameters"
+            )
 
         for layer in self.seq:
-            if self.checkpoint_level != "Linformer":
-                tensor = checkpoint(layer, tensor, use_reentrant=True)
-            else:
-                tensor = layer(tensor, **kwargs)
+            tensor = layer(tensor, **kwargs)
         return tensor
