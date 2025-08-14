@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from .rms_norm import RMSNorm
 
 
 class LinearAttentionHead(nn.Module):
@@ -30,6 +31,8 @@ class LinearAttentionHead(nn.Module):
         self.is_proj_tensor = isinstance(E_proj, torch.Tensor)
 
         self.causal_mask = causal_mask
+
+        self.subln = RMSNorm(self.dim, eps=1e-5, elementwise_affine=True)
 
     def forward(self, Q, K, V, **kwargs):
         # K shape: (bt, seq, dim_k)
@@ -98,7 +101,10 @@ class LinearAttentionHead(nn.Module):
         # (in the paper it is (P_bar_i.V_proj_i).T)
         # P_bar shape : (bt, seq, dim_k)
 
-        return P_bar
+        # RMS Normalization
+        attn = self.subln(P_bar)
+
+        return attn
 
     def mask_input(self, input_mask, K, V):
         if input_mask is not None:
