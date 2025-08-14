@@ -1,6 +1,0 @@
-DATA:
-  n_samples: 10_000
-  test_ratio: 0.2
-  batch_size:64
-MODEL:
-  activation: "swish"
