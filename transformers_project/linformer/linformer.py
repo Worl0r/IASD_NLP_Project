@@ -41,7 +41,6 @@ class LinformerEnc(nn.Module):
         dropout,
         parameter_sharing,
         k_reduce_by_layer,
-        w_o_intermediate_dim,
         method,
         activation,
     ):
@@ -66,7 +65,6 @@ class LinformerEnc(nn.Module):
             activation=activation,
             parameter_sharing=parameter_sharing,
             k_reduce_by_layer=k_reduce_by_layer,
-            w_o_intermediate_dim=w_o_intermediate_dim,
             decoder_mode=False,
             method=method,
         )
@@ -148,117 +146,3 @@ class LinformerEnc(nn.Module):
             f"Input sequence length {seq_len}"
             f" is less than the expected length {self.seq_len}."
         )
-
-
-class LinformerEncDec(LinformerEnc):
-    def __init__(
-        self,
-        seq_len,
-        dim,
-        dim_lin_base,
-        vocab_size,
-        n_features,
-        device,
-        d_conversion,
-        max_prediction_length,
-        dropout_input,
-        dropout_multi_head_att,
-        dropout_lin_att,
-        dim_ff,
-        ff_intermediate,
-        dropout_ff,
-        nhead,
-        n_layers,
-        dropout,
-        parameter_sharing,
-        k_reduce_by_layer,
-        w_o_intermediate_dim,
-        method,
-        activation,
-        checkpoint_level,
-    ):
-        super().__init__(
-            seq_len,
-            dim,
-            dim_lin_base,
-            vocab_size,
-            n_features,
-            device,
-            d_conversion,
-            max_prediction_length,
-            dropout_input,
-            dropout_multi_head_att,
-            dropout_lin_att,
-            dim_ff,
-            ff_intermediate,
-            dropout_ff,
-            nhead,
-            n_layers,
-            dropout,
-            parameter_sharing,
-            k_reduce_by_layer,
-            w_o_intermediate_dim,
-            method,
-            activation,
-        )
-
-        self.linformerDec = LinformerLayers(
-            seq_len,  # Be cautious here
-            dim,
-            dim_lin_base,
-            dim_ff=dim_ff,
-            dropout_ff=dropout_ff,
-            nhead=nhead,
-            n_layers=n_layers,
-            dropout_multi_head_att=dropout_multi_head_att,
-            dropout_lin_att=dropout_lin_att,
-            ff_intermediate=ff_intermediate,
-            activation=activation,
-            parameter_sharing=parameter_sharing,
-            k_reduce_by_layer=k_reduce_by_layer,
-            w_o_intermediate_dim=w_o_intermediate_dim,
-            decoder_mode=True,
-            method=method,
-        )
-
-        self.embeddings = nn.Embedding(
-            num_embeddings=vocab_size, embedding_dim=dim
-        )
-
-        # We use only contextual information in the decoder
-        self.decoder_layer = nn.Linear(
-            n_features - 1,
-            dim,
-        ).to(device)
-
-    def forward(self, tensor, *argv, **kwargs):
-        tensor = self.embeddings(tensor)
-
-        # We pad if needed
-        tensor = self.pad_sequences(tensor)
-
-        # tensor = self.input_layer(tensor)
-        tensor = self.pos_emb(tensor).type(tensor.type()) + tensor
-        tensor = self.input_dropout(tensor)
-        tensor = self.normalization(tensor)
-
-        # Encoder
-        tensor = self.linformer(tensor, **kwargs)
-
-        assert len(argv) == 1, ValueError(
-            "Target must be provided for the decoder"
-        )
-
-        target = argv[0]
-
-        target = self.decoder_layer(target)
-        target = self.pos_emb(target).type(tensor.type()) + target
-        target = self.input_dropout(target)
-        tensor = self.normalization(tensor)
-
-        # Decoder
-        tensor = self.linformerDec(target, encoded_sequences=tensor)
-
-        output = self.make_prediction(tensor)
-
-        return output

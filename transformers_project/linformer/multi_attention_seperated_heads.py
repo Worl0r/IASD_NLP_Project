@@ -27,7 +27,6 @@ class MHAttention_seperated_heads(nn.Module):
         F_proj,
         device,
         causal_mask,
-        w_o_intermediate_dim: int | None = None,
         decoder_mode=False,
         method="learnable",
     ):
@@ -37,8 +36,6 @@ class MHAttention_seperated_heads(nn.Module):
         self.seq_len = seq_len
         # Dimension of one head
         self.dim_k = dim_k
-        # Allow an additional linear layer after the concatenation of the heads
-        self.w_o_intermediate_dim = w_o_intermediate_dim
 
         # If parameter_sharing is not "layerwise",
         # we need to create new projections
@@ -76,32 +73,15 @@ class MHAttention_seperated_heads(nn.Module):
             self.to_k.append(nn.Linear(dim, dim_k, bias=False))
             self.to_v.append(nn.Linear(dim, dim_k, bias=False))
 
-        if w_o_intermediate_dim is None:
-            # Come back to the original dimension with one linear layer
-            self.w_o = nn.Linear(dim_k * nhead, dim)
-        else:
-            # Come back to the ordinal dimension with two linear layers
-            self.w_o_1 = nn.Linear(dim * nhead, w_o_intermediate_dim)
-            self.w_o_2 = nn.Linear(w_o_intermediate_dim, dim)
+        # Come back to the original dimension with one linear layer
+        self.w_o = nn.Linear(dim_k * nhead, dim)
 
         self.mh_dropout = nn.Dropout(dropout_multi_head_att)
 
     def forward(self, tensor, **kwargs):
-        batch_size, seq_len, dim = tensor.shape
-
         assert not (self.decoder_mode and "encoded_sequences" not in kwargs), (
             "encoded_sequences must be supplied if decoding"
         )
-
-        # assert not (
-        #     "encoded_sequences" in kwargs
-        #     and (
-        #         kwargs["encoded_sequences"].shape[0],
-        #         kwargs["encoded_sequences"].shape[1],
-        #         kwargs["encoded_sequences"].shape[2],
-        #     )
-        #     != (batch_size, seq_len, dim)
-        # ), "encoded_sequences size must be the same as the input tensor"
 
         head_outputs = []
 
@@ -127,11 +107,7 @@ class MHAttention_seperated_heads(nn.Module):
         out = torch.cat(head_outputs, dim=-1)
 
         # We come back to the original dimension with one or two linear layers
-        if self.w_o_intermediate_dim is None:
-            out = self.w_o(out)
-        else:
-            out = self.w_o_1(out)
-            out = self.w_o_2(out)
+        out = self.w_o(out)
 
         # Dropout
         out = self.mh_dropout(out)

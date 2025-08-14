@@ -132,7 +132,10 @@ def main():
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     dataset = load_data(tokenizer)
 
+    # Configuration
     batch_size = 32
+    num_epochs = 10
+
     train_loader = DataLoader(
         dataset["train"], batch_size=batch_size, shuffle=True
     )
@@ -164,7 +167,6 @@ def main():
         dropout=0.01,
         parameter_sharing="layerwise",
         k_reduce_by_layer=0,
-        w_o_intermediate_dim=None,
         method="learnable",
         activation="gelu",
     )
@@ -174,7 +176,6 @@ def main():
     loss_fn = nn.CrossEntropyLoss()
     writer = SummaryWriter("runs/transformer_classifier")
 
-    num_epochs = 10
     for epoch in range(1, num_epochs + 1):
         train(
             model,

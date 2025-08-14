@@ -68,12 +68,11 @@ class LinearAttentionHead(nn.Module):
         )
 
         # Only in decoder mode we add causal mask
-        # DEBUG
-        # if self.causal_mask is not None:
-        #     self.causal_mask = self.causal_mask.to(self.device)
-        #     simQK_proj = simQK_proj.masked_fill_(
-        #         ~self.causal_mask, float("-inf")
-        #     )
+        if self.causal_mask is not None:
+            self.causal_mask = self.causal_mask.to(self.device)
+            simQK_proj = simQK_proj.masked_fill_(
+                ~self.causal_mask, float("-inf")
+            )
 
         # Softmax function
         P_bar = simQK_proj.softmax(dim=-1)

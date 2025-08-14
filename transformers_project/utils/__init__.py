@@ -1,6 +1,3 @@
-from .directory_manager import DirectoryManager
-
-# from .papers.rotary import flash_attn_func
 from .types import (
     ActivationFunction,
     Config,
