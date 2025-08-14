@@ -124,7 +124,7 @@ class LinformerEnc(nn.Module):
 
         output = self.intermediary_layer(output)
 
-        output = self.activation(output)
+        # output = self.activation(output)
 
         output = self.linear_layer(output)
 
